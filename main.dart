@@ -295,8 +295,8 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
         child: Column(
           children: [
             const Text(
-              'Number Area',
-              style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white),
+              '双色球-采用AI大模型',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
             ),
             const SizedBox(height: 10),
 
