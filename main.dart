@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-//import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
+
 void main() => runApp(const MyApp());
 
 class MyApp extends StatelessWidget {
@@ -28,7 +28,7 @@ class SimpleArrayDisplay extends StatefulWidget {
 }
 
 class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
-  // 初始数组（与 Kivy 版本一致）
+  // 原有数组
   List<int> redArray = [0, 0, 0, 0, 0, 0];
   List<int> blueArray = [0];
 
@@ -51,13 +51,18 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
   bool loading = false;
   String buttonText = 'Start';
 
-  // 定时器
+  // 新增：错误信息与剩余次数
+  String errorMessage = '';
+  int remainingQuota = 0;
+  bool loadingQuota = true;
+
   Timer? _timer;
 
   @override
   void initState() {
     super.initState();
     _initVisibility();
+    _fetchQuota(); // 启动时获取剩余次数
   }
 
   @override
@@ -66,13 +71,11 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     super.dispose();
   }
 
-  // 根据当前数组初始化可见性列表
   void _initVisibility() {
     redVisible = List.generate(redArray.length, (_) => false);
     blueVisible = List.generate(blueArray.length, (_) => false);
   }
 
-  // 重置所有状态（对应 clickBtn）
   void _resetState() {
     setState(() {
       redIndex = 0;
@@ -85,59 +88,51 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
       progressText = '';
       buttonText = 'Start';
       loading = false;
+      errorMessage = ''; // 清空错误
     });
   }
 
-  // 开始播放（对应 start_play）
   void _startPlay() {
-    _timer?.cancel(); // 清除旧定时器
+    _timer?.cancel();
     setState(() {
       playing = true;
-      phase = 1; // 红区播放
+      phase = 1;
       redIndex = 0;
       blueIndex = 0;
       buttonText = '...';
     });
-    // 每秒显示一个数字
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       _showNextNumber();
     });
   }
 
-  // 显示下一个数字（对应 show_next_number）
   void _showNextNumber() {
     if (!playing) return;
 
     if (phase == 1) {
-      // 红区播放
       if (redIndex < redArray.length) {
         setState(() {
-          redVisible[redIndex] = true; // 触发淡入动画
+          redVisible[redIndex] = true;
           statusText = '${redIndex + 1} number: ${redArray[redIndex]}...';
-          statusColor = const Color(0xFFFF9999); // 浅红
-          progressText =
-              '${redIndex + 1}/${redArray.length} | ${blueIndex}/${blueArray.length}';
+          statusColor = const Color(0xFFFF9999);
+          progressText = '${redIndex + 1}/${redArray.length} | ${blueIndex}/${blueArray.length}';
         });
         redIndex++;
-        // 红区播放完毕，切换到蓝区
         if (redIndex >= redArray.length) {
           setState(() {
             phase = 2;
             statusText = '...';
-            statusColor = const Color(0xFF9999FF); // 浅蓝
+            statusColor = const Color(0xFF9999FF);
           });
-          // 红区全部数字闪烁一次（简单模拟：短暂变色后恢复）
           _flashRed();
         }
       }
     } else if (phase == 2) {
-      // 蓝区播放
       if (blueIndex < blueArray.length) {
         setState(() {
           blueVisible[blueIndex] = true;
           statusText = '... ${blueIndex + 1} ...: ${blueArray[blueIndex]}';
-          progressText =
-              '...: ${redArray.length}/${redArray.length} | ...: ${blueIndex + 1}/${blueArray.length}';
+          progressText = '...: ${redArray.length}/${redArray.length} | ...: ${blueIndex + 1}/${blueArray.length}';
         });
         blueIndex++;
         if (blueIndex >= blueArray.length) {
@@ -147,15 +142,12 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     }
   }
 
-  // 红区播放完成时的闪烁（对应原代码中的闪烁动画）
   void _flashRed() {
-    // 简单实现：将所有红区数字颜色变亮一次，再恢复
     Future.delayed(const Duration(milliseconds: 100), () {
-      setState(() {}); // 触发 rebuild，实际颜色由 widget 自身控制
+      setState(() {});
     });
   }
 
-  // 播放完成（对应 finish_play）
   void _finishPlay() {
     _timer?.cancel();
     setState(() {
@@ -164,11 +156,9 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
       buttonText = 'Replay';
       loading = false;
       statusText = 'Done';
-      statusColor = const Color(0xFFCC88CC); // 紫色
-      progressText =
-          '${redArray.length}/${redArray.length} | ${blueArray.length}/${blueArray.length}';
+      statusColor = const Color(0xFFCC88CC);
+      progressText = '${redArray.length}/${redArray.length} | ${blueArray.length}/${blueArray.length}';
     });
-    // 蓝区闪烁
     _flashBlue();
   }
 
@@ -178,21 +168,75 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     });
   }
 
-  // 获取数据（对应 fetch_data）
+    // 过滤错误信息中的 IP 地址和端口
+  String _filterSensitiveInfo(String errorMessage) {
+    // 匹配类似 "错误连接,address = 127.0.0.1,port = 59109" 中的 address 和 port 部分
+      // 这个正则匹配从 "address" 开始到端口号结束的整个部分
+      final pattern = RegExp(
+        r'address\s*=\s*\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b\s*,\s*port\s*=\s*\d{2,5}',
+        caseSensitive: false,
+      );
+      
+      // 直接替换为空字符串
+      String filtered = errorMessage.replaceAll(pattern, '');
+      
+      // 清理可能留下的多余逗号和空格
+      filtered = filtered.replaceAll(RegExp(r',\s*,'), ',');
+      filtered = filtered.replaceAll(RegExp(r',\s*$'), ''); // 去掉末尾的逗号
+      filtered = filtered.replaceAll(RegExp(r'\s+'), ' ').trim();
+      
+      return filtered;
+  }
+
+  // 获取剩余次数（假设接口为 /api/quota）
+  Future<void> _fetchQuota() async {
+    setState(() {
+      loadingQuota = true;
+      errorMessage = '';
+    });
+    try {
+      final client = HttpClient();
+      // 请将 IP 改为你的实际服务器 IP
+      final request = await client.getUrl(Uri.parse('http://43.138.243.151:8888/api/quota'));
+      final response = await request.close();
+      if (response.statusCode == 200) {
+        final stringData = await response.transform(utf8.decoder).join();
+        final Map<String, dynamic> data = jsonDecode(stringData);
+        setState(() {
+          remainingQuota = data['remaining'] ?? 0;
+          loadingQuota = false;
+        });
+      } else {
+        setState(() {
+          errorMessage = '获取剩余次数失败 (${response.statusCode})';
+          loadingQuota = false;
+        });
+      }
+      client.close();
+    } catch (e) {
+      setState(() {
+        errorMessage = _filterSensitiveInfo('网络错误: $e');
+        loadingQuota = false;
+      });
+    }
+  }
+
+  
+
+  // 获取数据（原 fetchData）
   Future<void> _fetchData() async {
     setState(() {
-      _resetState(); // 先重置
+      _resetState();
       loading = true;
       buttonText = '...';
       statusText = 'Fetching data...';
       statusColor = Colors.yellow.shade700;
+      errorMessage = '';
     });
 
     try {
-      // 随机等待 3~8 秒（原代码有 random wait，但被注释，这里保留注释）
-      // await Future.delayed(Duration(seconds: Random().nextInt(6) + 3));
-
       final client = HttpClient();
+      // 请将 IP 改为你的实际服务器 IP
       final request = await client.getUrl(Uri.parse('http://43.138.243.151:8888/api/hello/'));
       final response = await request.close();
       if (response.statusCode == 200) {
@@ -206,33 +250,33 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
         setState(() {
           redArray = newRed;
           blueArray = newBlue;
-          _initVisibility(); // 重新初始化可见性
+          _initVisibility();
           statusText = 'Done !!!';
           statusColor = Colors.green;
           loading = false;
         });
 
-        // 自动开始播放
+        // 成功获取后重新刷新剩余次数（因为服务器会扣减）
+        _fetchQuota();
+
         _startPlay();
       } else {
         setState(() {
-          statusText = 'Request fail: ${response.statusCode}';
-          statusColor = Colors.red;
+          errorMessage = _filterSensitiveInfo('请求失败: ${response.statusCode}');
           buttonText = 'Retry';
           loading = false;
         });
       }
+      client.close();
     } catch (e) {
       setState(() {
-        statusText = 'Error: $e';
-        statusColor = Colors.red;
+        errorMessage = _filterSensitiveInfo('错误: $e');
         buttonText = 'Retry';
         loading = false;
       });
     }
   }
 
-  // 按钮点击处理
   void _onButtonPressed() {
     if (loading) return;
     if (phase == 3 || buttonText == 'Replay' || buttonText == 'Retry') {
@@ -243,74 +287,51 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
 
   @override
   Widget build(BuildContext context) {
+    // 获取屏幕宽度用于自适应按钮宽度
+    double screenWidth = MediaQuery.of(context).size.width;
     return Scaffold(
       body: Padding(
         padding: const EdgeInsets.all(15.0),
         child: Column(
           children: [
-            // 标题
             const Text(
               'Number Area',
+              style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            const SizedBox(height: 10),
+
+            // 显示剩余次数
+            Text(
+              loadingQuota
+                  ? '获取剩余次数中...'
+                  : '今日剩余次数：$remainingQuota',
               style: TextStyle(
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
+                fontSize: 18,
+                color: remainingQuota > 0 ? Colors.green : Colors.red,
               ),
             ),
             const SizedBox(height: 20),
 
-            // 红区区域
+            // 红区
             _buildHeaderRow(
               title: 'red',
               titleColor: const Color(0xFFFF6666),
               child: _buildNumberRow(
                 array: redArray,
                 visibleList: redVisible,
-                bgColor: const Color(0xFF6B2D2D), // 深红背景
+                bgColor: const Color(0xFF6B2D2D),
                 textColor: const Color(0xFFFFCCCC),
               ),
             ),
-
-            // 蓝区区域
+            // 蓝区
             _buildHeaderRow(
               title: 'blue',
               titleColor: const Color(0xFF6666FF),
               child: _buildNumberRow(
                 array: blueArray,
                 visibleList: blueVisible,
-                bgColor: const Color(0xFF26264D), // 深蓝背景
+                bgColor: const Color(0xFF26264D),
                 textColor: const Color(0xFFCCCCFF),
-              ),
-            ),
-
-            const SizedBox(height: 10),
-
-            // 状态标签（原 status_label，实际布局中被注释，此处保留但可以隐藏）
-            // 为了与原代码对应，我们将其放在这里但不显示，如需显示可取消注释
-            // Container(
-            //   alignment: Alignment.center,
-            //   child: Text(
-            //     statusText,
-            //     style: TextStyle(fontSize: 20, color: statusColor),
-            //   ),
-            // ),
-
-            // 播放按钮（居中）
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 200),
-              child: ElevatedButton(
-                onPressed: loading ? null : _onButtonPressed,
-                style: ElevatedButton.styleFrom(
-                  minimumSize: const Size(double.infinity, 50),
-                  backgroundColor: loading
-                      ? Colors.grey
-                      : (buttonText == 'Replay'
-                          ? const Color(0xFF6633CC)
-                          : const Color(0xFF3399CC)),
-                  foregroundColor: Colors.white,
-                  textStyle: const TextStyle(fontSize: 30),
-                ),
-                child: Text(buttonText),
               ),
             ),
 
@@ -321,13 +342,44 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
               progressText,
               style: const TextStyle(fontSize: 16, color: Color(0xFFCCCCCC)),
             ),
+
+            const SizedBox(height: 20),
+
+            // 播放按钮（自适应居中）
+            Center(
+              child: SizedBox(
+                width: screenWidth * 0.6, // 按钮宽度为屏幕宽度的60%
+                child: ElevatedButton(
+                  onPressed: loading ? null : _onButtonPressed,
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 50),
+                    backgroundColor: loading
+                        ? Colors.grey
+                        : (buttonText == 'Replay'
+                            ? const Color(0xFF6633CC)
+                            : const Color(0xFF3399CC)),
+                    foregroundColor: Colors.white,
+                    textStyle: const TextStyle(fontSize: 30),
+                  ),
+                  child: Text(buttonText),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 10),
+
+            // 错误信息显示
+            Text(
+              errorMessage,
+              style: const TextStyle(color: Colors.red, fontSize: 16),
+              textAlign: TextAlign.center,
+            ),
           ],
         ),
       ),
     );
   }
 
-  // 构建标题行（红/蓝 标题 + 数字区域）
   Widget _buildHeaderRow({
     required String title,
     required Color titleColor,
@@ -341,11 +393,7 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
             width: 60,
             child: Text(
               title,
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.w500,
-                color: titleColor,
-              ),
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w500, color: titleColor),
             ),
           ),
           Expanded(child: child),
@@ -354,7 +402,6 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     );
   }
 
-  // 构建一行数字圆圈
   Widget _buildNumberRow({
     required List<int> array,
     required List<bool> visibleList,
@@ -369,10 +416,7 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
             width: 60,
             height: 60,
             margin: const EdgeInsets.symmetric(horizontal: 5),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: bgColor,
-            ),
+            decoration: BoxDecoration(shape: BoxShape.circle, color: bgColor),
             child: Center(
               child: AnimatedOpacity(
                 opacity: visibleList[index] ? 1.0 : 0.0,
