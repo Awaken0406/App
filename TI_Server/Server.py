@@ -15,7 +15,7 @@ MYSQL_CONFIG = {
     'host': 'localhost',
     'port': 3306,
     'user': 'root',
-    'password': 'Root@123456',
+    'password': '123456',
     'db': 'senge',
     'autocommit': True
 }
@@ -154,7 +154,7 @@ async def get_quota(request: Request):
             ip_cache[client_ip] = (count, today)
 
     remaining = max(0, RATE_LIMIT_PER_DAY - count)
-    return {"remaining": remaining}
+    return {"remaining": remaining,"description":"双色球-采用SENGE AI大模型"}
 
 # ==================== 原始路由（添加依赖） ====================
 class EchoResponse(BaseModel):
