@@ -1,9 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 
-void main() => runApp(const MyApp());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // 强制横屏
+  SystemChrome.setPreferredOrientations([
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
+  ]);
+  runApp(const MyApp());
+}
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -28,6 +37,9 @@ class SimpleArrayDisplay extends StatefulWidget {
 }
 
 class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
+  // 从服务器获取的描述文本
+  String descriptionText = '双色球-采用AI大模型'; // 默认值
+
   // 原有数组
   List<int> redArray = [0, 0, 0, 0, 0, 0];
   List<int> blueArray = [0];
@@ -49,7 +61,11 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
 
   // 按钮状态
   bool loading = false;
-  String buttonText = 'Start';
+  String buttonText = '来财'; // 按钮文字固定为“来财”
+
+  // 内部状态标记（用于区分完成、错误）
+  bool _isCompleted = false;
+  bool _isError = false;
 
   // 新增：错误信息与剩余次数
   String errorMessage = '';
@@ -86,9 +102,10 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
       statusText = 'Start';
       statusColor = Colors.grey.shade400;
       progressText = '';
-      buttonText = 'Start';
       loading = false;
-      errorMessage = ''; // 清空错误
+      errorMessage = '';
+      _isCompleted = false;
+      _isError = false;
     });
   }
 
@@ -99,7 +116,6 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
       phase = 1;
       redIndex = 0;
       blueIndex = 0;
-      buttonText = '...';
     });
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       _showNextNumber();
@@ -153,11 +169,11 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     setState(() {
       playing = false;
       phase = 3;
-      buttonText = 'Replay';
       loading = false;
       statusText = 'Done';
       statusColor = const Color(0xFFCC88CC);
       progressText = '${redArray.length}/${redArray.length} | ${blueArray.length}/${blueArray.length}';
+      _isCompleted = true; // 标记为完成状态
     });
     _flashBlue();
   }
@@ -168,27 +184,20 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     });
   }
 
-    // 过滤错误信息中的 IP 地址和端口
+  // 过滤错误信息中的 IP 地址和端口
   String _filterSensitiveInfo(String errorMessage) {
-    // 匹配类似 "错误连接,address = 127.0.0.1,port = 59109" 中的 address 和 port 部分
-      // 这个正则匹配从 "address" 开始到端口号结束的整个部分
-      final pattern = RegExp(
-        r'address\s*=\s*\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b\s*,\s*port\s*=\s*\d{2,5}',
-        caseSensitive: false,
-      );
-      
-      // 直接替换为空字符串
-      String filtered = errorMessage.replaceAll(pattern, '');
-      
-      // 清理可能留下的多余逗号和空格
-      filtered = filtered.replaceAll(RegExp(r',\s*,'), ',');
-      filtered = filtered.replaceAll(RegExp(r',\s*$'), ''); // 去掉末尾的逗号
-      filtered = filtered.replaceAll(RegExp(r'\s+'), ' ').trim();
-      
-      return filtered;
+    final pattern = RegExp(
+      r'address\s*=\s*\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b\s*,\s*port\s*=\s*\d{2,5}',
+      caseSensitive: false,
+    );
+    String filtered = errorMessage.replaceAll(pattern, '');
+    filtered = filtered.replaceAll(RegExp(r',\s*,'), ',');
+    filtered = filtered.replaceAll(RegExp(r',\s*$'), '');
+    filtered = filtered.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return filtered;
   }
 
-  // 获取剩余次数（假设接口为 /api/quota）
+  // 获取剩余次数
   Future<void> _fetchQuota() async {
     setState(() {
       loadingQuota = true;
@@ -196,12 +205,15 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     });
     try {
       final client = HttpClient();
-      // 请将 IP 改为你的实际服务器 IP
       final request = await client.getUrl(Uri.parse('http://43.138.243.151:8888/api/quota'));
       final response = await request.close();
       if (response.statusCode == 200) {
         final stringData = await response.transform(utf8.decoder).join();
         final Map<String, dynamic> data = jsonDecode(stringData);
+        // 解析描述文本（如果接口返回）
+        if (data.containsKey('description')) {
+          descriptionText = data['description'].toString();
+        }
         setState(() {
           remainingQuota = data['remaining'] ?? 0;
           loadingQuota = false;
@@ -221,14 +233,13 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     }
   }
 
-  
-
-  // 获取数据（原 fetchData）
+  // 获取数据
   Future<void> _fetchData() async {
     setState(() {
-      _resetState();
+      _resetState(); // 重置界面
       loading = true;
-      buttonText = '...';
+      _isCompleted = false;
+      _isError = false;
       statusText = 'Fetching data...';
       statusColor = Colors.yellow.shade700;
       errorMessage = '';
@@ -236,12 +247,14 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
 
     try {
       final client = HttpClient();
-      // 请将 IP 改为你的实际服务器 IP
       final request = await client.getUrl(Uri.parse('http://43.138.243.151:8888/api/hello/'));
       final response = await request.close();
       if (response.statusCode == 200) {
         final stringData = await response.transform(utf8.decoder).join();
         final Map<String, dynamic> data = jsonDecode(stringData);
+
+
+
         final String redStr = data['red'];
         final String blueStr = data['blue'];
         final List<int> newRed = redStr.split(',').map(int.parse).toList();
@@ -256,47 +269,65 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
           loading = false;
         });
 
-        // 成功获取后重新刷新剩余次数（因为服务器会扣减）
+        // 成功获取后重新刷新剩余次数（服务器会扣减）
         _fetchQuota();
 
         _startPlay();
       } else {
         setState(() {
           errorMessage = _filterSensitiveInfo('请求失败: ${response.statusCode}');
-          buttonText = 'Retry';
           loading = false;
+          _isError = true; // 标记错误状态
         });
       }
       client.close();
     } catch (e) {
       setState(() {
         errorMessage = _filterSensitiveInfo('错误: $e');
-        buttonText = 'Retry';
         loading = false;
+        _isError = true; // 标记错误状态
       });
     }
   }
 
   void _onButtonPressed() {
     if (loading) return;
-    if (phase == 3 || buttonText == 'Replay' || buttonText == 'Retry') {
+
+    // 剩余次数为0时不允许请求
+    if (remainingQuota <= 0) {
+      setState(() {
+        errorMessage = '今日次数已用完';
+      });
+      return;
+    }
+
+    // 如果处于完成或错误状态，先重置界面再获取新数据
+    if (_isCompleted || _isError) {
       _resetState();
     }
     _fetchData();
   }
 
+  // 根据状态获取按钮背景色
+  Color _getButtonColor() {
+    if (loading) return Colors.grey;
+    if (_isCompleted) return const Color(0xFF6633CC); // 紫色
+    if (_isError) return Colors.red; // 红色
+    return const Color(0xFF3399CC); // 默认蓝色
+  }
+
   @override
   Widget build(BuildContext context) {
-    // 获取屏幕宽度用于自适应按钮宽度
     double screenWidth = MediaQuery.of(context).size.width;
     return Scaffold(
       body: Padding(
         padding: const EdgeInsets.all(15.0),
         child: Column(
           children: [
-            const Text(
-              '双色球-采用AI大模型',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+            // 动态描述文本（替换原“双色球-采用AI大模型”）
+            Text(
+              descriptionText,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
             ),
             const SizedBox(height: 10),
 
@@ -345,23 +376,19 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
 
             const SizedBox(height: 20),
 
-            // 播放按钮（自适应居中）
+            // 播放按钮（自适应居中，文字固定为“来财”）
             Center(
               child: SizedBox(
-                width: screenWidth * 0.6, // 按钮宽度为屏幕宽度的60%
+                width: screenWidth * 0.6,
                 child: ElevatedButton(
-                  onPressed: loading ? null : _onButtonPressed,
+                  onPressed: (loading || remainingQuota <= 0) ? null : _onButtonPressed,
                   style: ElevatedButton.styleFrom(
                     minimumSize: const Size(double.infinity, 50),
-                    backgroundColor: loading
-                        ? Colors.grey
-                        : (buttonText == 'Replay'
-                            ? const Color(0xFF6633CC)
-                            : const Color(0xFF3399CC)),
+                    backgroundColor: _getButtonColor(),
                     foregroundColor: Colors.white,
                     textStyle: const TextStyle(fontSize: 30),
                   ),
-                  child: Text(buttonText),
+                  child: Text(buttonText), // 始终显示“来财”
                 ),
               ),
             ),
