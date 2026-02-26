@@ -37,8 +37,10 @@ class SimpleArrayDisplay extends StatefulWidget {
 }
 
 class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
-  // 从服务器获取的描述文本
-  String descriptionText = '双色球-采用AI大模型'; // 默认值
+
+  String serverAddr = 'www.sengeapp.top';
+  //String serverAddr = '127.0.0.1';
+
 
   // 原有数组
   List<int> redArray = [0, 0, 0, 0, 0, 0];
@@ -53,7 +55,8 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
   // 控制每个数字是否显示（用于淡入动画）
   List<bool> redVisible = [];
   List<bool> blueVisible = [];
-
+    // 从服务器获取的描述文本
+  String descriptionText = '双色球-采用大模型'; // 默认值
   // UI 状态文字
   String statusText = 'Start';
   Color statusColor = Colors.grey.shade400;
@@ -205,7 +208,9 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     });
     try {
       final client = HttpClient();
-      final request = await client.getUrl(Uri.parse('http://43.138.243.151:8888/api/quota'));
+      final request = await client.getUrl(Uri.parse('https://${serverAddr}/api/quota'));
+      request.headers.add('X-App-Key', 'SENGE_SECRET_KEY');
+      request.headers.add('User-Agent', 'SENGEApp/1.0.0');
       final response = await request.close();
       if (response.statusCode == 200) {
         final stringData = await response.transform(utf8.decoder).join();
@@ -247,13 +252,13 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
 
     try {
       final client = HttpClient();
-      final request = await client.getUrl(Uri.parse('http://43.138.243.151:8888/api/hello/'));
+      final request = await client.getUrl(Uri.parse('https://${serverAddr}/api/hello/'));
+      request.headers.add('X-App-Key', 'SENGE_SECRET_KEY');
+      request.headers.add('User-Agent', 'SENGEApp/1.0.0');
       final response = await request.close();
       if (response.statusCode == 200) {
         final stringData = await response.transform(utf8.decoder).join();
         final Map<String, dynamic> data = jsonDecode(stringData);
-
-
 
         final String redStr = data['red'];
         final String blueStr = data['blue'];
@@ -320,88 +325,97 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
   Widget build(BuildContext context) {
     double screenWidth = MediaQuery.of(context).size.width;
     return Scaffold(
-      body: Padding(
-        padding: const EdgeInsets.all(15.0),
-        child: Column(
-          children: [
-            // 动态描述文本（替换原“双色球-采用AI大模型”）
-            Text(
-              descriptionText,
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-            const SizedBox(height: 10),
-
-            // 显示剩余次数
-            Text(
-              loadingQuota
-                  ? '获取剩余次数中...'
-                  : '今日剩余次数：$remainingQuota',
-              style: TextStyle(
-                fontSize: 18,
-                color: remainingQuota > 0 ? Colors.green : Colors.red,
+      body: Container(
+        decoration: const BoxDecoration(
+          image: DecorationImage(
+            image: AssetImage('assets/background.jpg'), // 背景图路径
+            fit: BoxFit.cover, // 覆盖整个屏幕
+            opacity: 0.3, // 透明度，让前景内容更清晰
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(15.0),
+          child: Column(
+            children: [
+              // 动态描述文本（替换原“双色球-采用AI大模型”）
+              Text(
+                descriptionText,
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
               ),
-            ),
-            const SizedBox(height: 20),
+              const SizedBox(height: 10),
 
-            // 红区
-            _buildHeaderRow(
-              title: 'red',
-              titleColor: const Color(0xFFFF6666),
-              child: _buildNumberRow(
-                array: redArray,
-                visibleList: redVisible,
-                bgColor: const Color(0xFF6B2D2D),
-                textColor: const Color(0xFFFFCCCC),
-              ),
-            ),
-            // 蓝区
-            _buildHeaderRow(
-              title: 'blue',
-              titleColor: const Color(0xFF6666FF),
-              child: _buildNumberRow(
-                array: blueArray,
-                visibleList: blueVisible,
-                bgColor: const Color(0xFF26264D),
-                textColor: const Color(0xFFCCCCFF),
-              ),
-            ),
-
-            const SizedBox(height: 10),
-
-            // 进度标签
-            Text(
-              progressText,
-              style: const TextStyle(fontSize: 16, color: Color(0xFFCCCCCC)),
-            ),
-
-            const SizedBox(height: 20),
-
-            // 播放按钮（自适应居中，文字固定为“来财”）
-            Center(
-              child: SizedBox(
-                width: screenWidth * 0.6,
-                child: ElevatedButton(
-                  onPressed: (loading || remainingQuota <= 0) ? null : _onButtonPressed,
-                  style: ElevatedButton.styleFrom(
-                    minimumSize: const Size(double.infinity, 50),
-                    backgroundColor: _getButtonColor(),
-                    foregroundColor: Colors.white,
-                    textStyle: const TextStyle(fontSize: 30),
-                  ),
-                  child: Text(buttonText), // 始终显示“来财”
+              // 显示剩余次数
+              Text(
+                loadingQuota
+                    ? '获取剩余次数中...'
+                    : '今日剩余次数：$remainingQuota',
+                style: TextStyle(
+                  fontSize: 18,
+                  color: remainingQuota > 0 ? Colors.green : Colors.red,
                 ),
               ),
-            ),
+              const SizedBox(height: 20),
 
-            const SizedBox(height: 10),
+              // 红区
+              _buildHeaderRow(
+                title: 'red',
+                titleColor: const Color(0xFFFF6666),
+                child: _buildNumberRow(
+                  array: redArray,
+                  visibleList: redVisible,
+                  bgColor: const Color(0xFF6B2D2D),
+                  textColor: const Color(0xFFFFCCCC),
+                ),
+              ),
+              // 蓝区
+              _buildHeaderRow(
+                title: 'blue',
+                titleColor: const Color(0xFF6666FF),
+                child: _buildNumberRow(
+                  array: blueArray,
+                  visibleList: blueVisible,
+                  bgColor: const Color(0xFF26264D),
+                  textColor: const Color(0xFFCCCCFF),
+                ),
+              ),
 
-            // 错误信息显示
-            Text(
-              errorMessage,
-              style: const TextStyle(color: Colors.red, fontSize: 16),
-              textAlign: TextAlign.center,
-            ),
-          ],
+              const SizedBox(height: 10),
+
+              // 进度标签
+              Text(
+                progressText,
+                style: const TextStyle(fontSize: 16, color: Color(0xFFCCCCCC)),
+              ),
+
+              const SizedBox(height: 20),
+
+              // 播放按钮（自适应居中，文字固定为“来财”）
+              Center(
+                child: SizedBox(
+                  width: screenWidth * 0.6,
+                  child: ElevatedButton(
+                    onPressed: (loading || remainingQuota <= 0) ? null : _onButtonPressed,
+                    style: ElevatedButton.styleFrom(
+                      minimumSize: const Size(double.infinity, 50),
+                      backgroundColor: _getButtonColor(),
+                      foregroundColor: Colors.white,
+                      textStyle: const TextStyle(fontSize: 30),
+                    ),
+                    child: Text(buttonText), // 始终显示“来财”
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              // 错误信息显示
+              Text(
+                errorMessage,
+                style: const TextStyle(color: Colors.red, fontSize: 16),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
       ),
     );

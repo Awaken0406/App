@@ -1,0 +1,18 @@
+客户端:
+1,app名称和图标
+2,需要申请软著
+
+
+服务器:
+1 购买域名 //OK
+2,服务器部署ngnix反向代理(需要用到证书) //OK
+3,添加请求头校验 //OK
+4,APP备案(需要用到域名)
+
+
+
+# 生成私钥（key文件）
+openssl genrsa -out ssl_key.pem 2048
+# 生成证书（pem文件，有效期365天，替换IP为你的服务器IP）
+openssl req -new -x509 -key ssl_key.pem -out ssl_cert.pem -days 365 -subj "/CN=43.138.243.151"
+

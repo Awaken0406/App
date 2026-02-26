@@ -15,15 +15,11 @@ MYSQL_CONFIG = {
     'host': 'localhost',
     'port': 3306,
     'user': 'root',
-    'password': '123456',
+    'password': 'Root@123456',
     'db': 'senge',
     'autocommit': True
 }
 RATE_LIMIT_PER_DAY = 3  # 每个IP每天最多请求次数
-
-# SSL 证书文件路径（请根据实际路径修改）
-SSL_CERTFILE = "/path/to/your/certificate.pem"   # 例如 ./cert.pem
-SSL_KEYFILE  = "/path/to/your/private.key"       # 例如 ./key.pem
 
 # ==================== 全局变量 ====================
 app = FastAPI(title="Simple API Demo with Rate Limit")
@@ -68,6 +64,11 @@ async def reset_all_limits():
 async def rate_limit(request: Request):
     client_ip = request.client.host
     today = date.today()
+
+    app_key = request.headers.get('X-App-Key')
+    if app_key != 'SENGE_SECRET_KEY':
+        # 校验失败，返回403禁止访问
+        raise HTTPException(status_code=403, detail="禁止访问")
 
     async with cache_lock:
         # 1. 检查内存缓存
@@ -132,6 +133,11 @@ async def get_quota(request: Request):
     client_ip = request.client.host
     today = date.today()
 
+    app_key = request.headers.get('X-App-Key')
+    if app_key != 'SENGE_SECRET_KEY':
+        # 校验失败，返回403禁止访问
+        raise HTTPException(status_code=403, detail="禁止访问")
+
     async with cache_lock:
         # 优先从缓存读取
         cached = ip_cache.get(client_ip)
@@ -154,7 +160,7 @@ async def get_quota(request: Request):
             ip_cache[client_ip] = (count, today)
 
     remaining = max(0, RATE_LIMIT_PER_DAY - count)
-    return {"remaining": remaining,"description":"双色球-采用SENGE AI大模型"}
+    return {"remaining": remaining,"description":"双色球-采用SENGE大模型"}
 
 # ==================== 原始路由（添加依赖） ====================
 class EchoResponse(BaseModel):
@@ -214,6 +220,4 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=8888,
-        #ssl_keyfile=SSL_KEYFILE,    # 私钥文件路径
-        #ssl_certfile=SSL_CERTFILE   # 证书文件路径
     )
