@@ -42,6 +42,7 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
   //String serverAddr = '127.0.0.1';
 
 
+
   // 原有数组
   List<int> redArray = [0, 0, 0, 0, 0, 0];
   List<int> blueArray = [0];
@@ -82,6 +83,7 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     super.initState();
     _initVisibility();
     _fetchQuota(); // 启动时获取剩余次数
+  // 初始化 Dio 实例
   }
 
   @override
@@ -208,13 +210,23 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     });
     try {
       final client = HttpClient();
+        //client.securityContext.allowedProtocols = [ SecurityProtocol.tls12];
+        print('⚡️ badCertificateCallback 被调用了22222！');
+       client.badCertificateCallback = (X509Certificate cert, String host, int port) {
+        print('⚡️ badCertificateCallback 被调用了！');
+        return true;
+        };     
       final request = await client.getUrl(Uri.parse('https://${serverAddr}/api/quota'));
       request.headers.add('X-App-Key', 'SENGE_SECRET_KEY');
       request.headers.add('User-Agent', 'SENGEApp/1.0.0');
       final response = await request.close();
+
+  
       if (response.statusCode == 200) {
         final stringData = await response.transform(utf8.decoder).join();
         final Map<String, dynamic> data = jsonDecode(stringData);
+
+   
         // 解析描述文本（如果接口返回）
         if (data.containsKey('description')) {
           descriptionText = data['description'].toString();
@@ -222,15 +234,27 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
         setState(() {
           remainingQuota = data['remaining'] ?? 0;
           loadingQuota = false;
-        });
+        }); 
       } else {
         setState(() {
           errorMessage = '获取剩余次数失败 (${response.statusCode})';
           loadingQuota = false;
         });
       }
-      client.close();
+      //client.close();
     } catch (e) {
+      print('❌ 直接测试异常: $e');
+    if (e is HandshakeException) {
+      print('   HandshakeException 详情: ${e.message}');
+      print('   HandshakeException 操作系统消息: ${e.osError?.message}');
+    }
+    if (e is SocketException) {
+      print('   SocketException 详情: ${e.message}');
+      print('   SocketException 操作系统错误: ${e.osError?.message}');
+    }
+    if (e is TlsException) {
+      print('   TlsException 详情: ${e.message}');
+    }
       setState(() {
         errorMessage = _filterSensitiveInfo('网络错误: $e');
         loadingQuota = false;
