@@ -134,9 +134,9 @@ async def get_count(request: Request):
     today = date.today()
 
     app_key = request.headers.get('X-App-Key')
-    if app_key != 'SENGE_SECRET_KEY':
+   # if app_key != 'SENGE_SECRET_KEY':
         # 校验失败，返回403禁止访问
-        raise HTTPException(status_code=403, detail="禁止访问")
+   #     raise HTTPException(status_code=403, detail="禁止访问")
 
     async with cache_lock:
         # 优先从缓存读取
