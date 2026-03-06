@@ -3,6 +3,9 @@ import 'package:flutter/services.dart';
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
+import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
+
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -40,7 +43,6 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
 
   String serverAddr = 'www.sengeapp.top';
   //String serverAddr = '127.0.0.1';
-
 
 
   // 原有数组
@@ -208,58 +210,112 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
       loadingQuota = true;
       errorMessage = '';
     });
+
+    try{
+       Dio dio = Dio();
+        // 配置HttpClient适配器
+        (dio.httpClientAdapter as IOHttpClientAdapter).onHttpClientCreate = (HttpClient client) {
+          // 在这里配置底层的HttpClient
+          client.badCertificateCallback = (X509Certificate cert, String host, int port) {
+                // 打印跳过验证的详细日志（方便调试）
+                print('=====================================');
+                print('⚠️  跳过SSL证书验证 - 调试信息');
+                print('请求域名：$host');
+                print('请求端口：$port');
+                print('证书颁发者：${cert.issuer}');
+                print('证书主体：${cert.subject}');
+                print('=====================================');
+                
+                // 可选：仅跳过指定域名（推荐），其他域名仍校验
+                bool skipCert = host == 'www.sengeapp.top'; 
+                if (skipCert) {
+                  print('✅ 已跳过 $host 的证书验证');
+                } else {
+                  print('❌ 未跳过 $host 的证书验证');
+                }
+                return skipCert; // 返回true才会跳过，false则正常校验
+          };
+        };
+
+       Response response = await dio.get('https://api.apiopen.top');
+        //Response response = await dio.get('https://${serverAddr}/api/count');
+      
+      // 3. 打印响应结果（验证请求成功）
+      print('✅ HTTPS 请求成功！');
+      print('状态码：${response.statusCode}');
+      print('响应数据：${response.data}');
+    }
+    catch (e) {
+        print('❌ 直接测试异常: $e');
+    }
+
+
+   /*
     try {
-      final client = HttpClient();
-        //client.securityContext.allowedProtocols = [ SecurityProtocol.tls12];
-        print('⚡️ badCertificateCallback 被调用了22222！');
-       client.badCertificateCallback = (X509Certificate cert, String host, int port) {
-        print('⚡️ badCertificateCallback 被调用了！');
-        return true;
-        };     
-      final request = await client.getUrl(Uri.parse('https://${serverAddr}/api/quota'));
-      request.headers.add('X-App-Key', 'SENGE_SECRET_KEY');
-      request.headers.add('User-Agent', 'SENGEApp/1.0.0');
-      final response = await request.close();
+      //final client = HttpClient();  
+        Dio dio = Dio();
+
+      //final request = await client.getUrl(Uri.parse('https://${serverAddr}/api/count'));
+     // final request = await client.getUrl(Uri.parse('https://www.bilibili.com/'));
+      //request.headers.add('X-App-Key', 'SENGE_SECRET_KEY');
+      //request.headers.add('User-Agent', 'SENGEApp/1.0.0');
+
 
   
-      if (response.statusCode == 200) {
-        final stringData = await response.transform(utf8.decoder).join();
-        final Map<String, dynamic> data = jsonDecode(stringData);
+      Response response = await dio.get(
+            '43.138.243.151:8888/api/quota',
+            // 可选：显式传递 Host 头，解决 SNI 问题
+            options: Options(
+              headers: {
+                //'Host': serverAddr,
+                'X-App-Key': 'SENGE_SECRET_KEY'
+              },
+            ),
+          );
 
-   
-        // 解析描述文本（如果接口返回）
-        if (data.containsKey('description')) {
-          descriptionText = data['description'].toString();
-        }
-        setState(() {
-          remainingQuota = data['remaining'] ?? 0;
-          loadingQuota = false;
-        }); 
+      //final response = await request.close();
+
+      if (response.statusCode == 200) {
+          print('response.statusCode == 200');
+          //final stringData = await response.transform(utf8.decoder).join();
+          //final Map<String, dynamic> data = jsonDecode(stringData);
+
+          Map<String, dynamic> data = response.data;
+
+    
+          // 解析描述文本（如果接口返回）
+          if (data.containsKey('description')) {
+            descriptionText = data['description'].toString();
+          }
+          setState(() {
+            remainingQuota = data['remaining'] ?? 0;
+            loadingQuota = false;
+          }); 
       } else {
-        setState(() {
-          errorMessage = '获取剩余次数失败 (${response.statusCode})';
-          loadingQuota = false;
-        });
+          setState(() {
+            errorMessage = '获取剩余次数失败 (${response.statusCode})';
+            loadingQuota = false;
+          });
       }
       //client.close();
     } catch (e) {
-      print('❌ 直接测试异常: $e');
-    if (e is HandshakeException) {
-      print('   HandshakeException 详情: ${e.message}');
-      print('   HandshakeException 操作系统消息: ${e.osError?.message}');
-    }
-    if (e is SocketException) {
-      print('   SocketException 详情: ${e.message}');
-      print('   SocketException 操作系统错误: ${e.osError?.message}');
-    }
-    if (e is TlsException) {
-      print('   TlsException 详情: ${e.message}');
-    }
-      setState(() {
-        errorMessage = _filterSensitiveInfo('网络错误: $e');
-        loadingQuota = false;
-      });
-    }
+        print('❌ 直接测试异常: $e');
+        if (e is HandshakeException) {
+          print('   HandshakeException 详情: ${e.message}');
+          print('   HandshakeException 操作系统消息: ${e.osError?.message}');
+        }
+        if (e is SocketException) {
+          print('   SocketException 详情: ${e.message}');
+          print('   SocketException 操作系统错误: ${e.osError?.message}');
+        }
+        if (e is TlsException) {
+          print('   TlsException 详情: ${e.message}');
+        }
+          setState(() {
+            errorMessage = _filterSensitiveInfo('网络错误: $e');
+            loadingQuota = false;
+          });
+    }*/
   }
 
   // 获取数据
@@ -276,7 +332,7 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
 
     try {
       final client = HttpClient();
-      final request = await client.getUrl(Uri.parse('https://${serverAddr}/api/hello/'));
+      final request = await client.getUrl(Uri.parse('https://${serverAddr}/api/doit/'));
       request.headers.add('X-App-Key', 'SENGE_SECRET_KEY');
       request.headers.add('User-Agent', 'SENGEApp/1.0.0');
       final response = await request.close();
