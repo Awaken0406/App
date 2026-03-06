@@ -66,9 +66,9 @@ async def rate_limit(request: Request):
     today = date.today()
 
     app_key = request.headers.get('X-App-Key')
-    if app_key != 'SENGE_SECRET_KEY':
+    #if app_key != 'SENGE_SECRET_KEY':
         # 校验失败，返回403禁止访问
-        raise HTTPException(status_code=403, detail="禁止访问")
+    #    raise HTTPException(status_code=403, detail="禁止访问")
 
     async with cache_lock:
         # 1. 检查内存缓存
@@ -127,8 +127,8 @@ async def update_db_count(ip: str, new_count: int, today: date):
         print(f"更新数据库失败 {ip}: {e}")
 
 # ==================== 新增接口：查询剩余次数 ====================
-@app.get("/api/quota")
-async def get_quota(request: Request):
+@app.get("/api/count")
+async def get_count(request: Request):
     """返回当前IP剩余的请求次数（不消耗次数）"""
     client_ip = request.client.host
     today = date.today()
@@ -167,8 +167,8 @@ class EchoResponse(BaseModel):
     received: Dict[str, Any]
     message: str = "Data received"
 
-@app.get("/api/hello", dependencies=[Depends(rate_limit)])
-async def hello(name: Optional[str] = "World"):
+@app.get("/api/doit", dependencies=[Depends(rate_limit)])
+async def doit(name: Optional[str] = "World"):
     outred, outblue = Selenium_Ball.CallRun()
     red = ", ".join(map(str, outred))
     blue = ", ".join(map(str, outblue))
@@ -179,24 +179,8 @@ async def hello(name: Optional[str] = "World"):
         "blue": blue
     }
 
-@app.post("/api/echo", response_model=EchoResponse, dependencies=[Depends(rate_limit)])
-async def echo(request: Request):
-    data = await request.json()
-    return {
-        "received": data,
-        "message": "Data received"
-    }
 
-@app.get("/api/status", dependencies=[Depends(rate_limit)])
-@app.post("/api/status", dependencies=[Depends(rate_limit)])
-async def status(request: Request):
-    body = await request.json() if request.method == "POST" else None
-    return {
-        "status": "ok",
-        "method": request.method,
-        "query_params": dict(request.query_params),
-        "body": body
-    }
+
 
 # ==================== 生命周期管理 ====================
 @app.on_event("startup")
