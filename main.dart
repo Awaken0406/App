@@ -1,15 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 
-
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  // 强制横屏
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.landscapeLeft,
     DeviceOrientation.landscapeRight,
@@ -40,58 +37,61 @@ class SimpleArrayDisplay extends StatefulWidget {
 }
 
 class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
+  static const String serverAddr = 'www.sengeapp.top';
+  static const String buttonText = '来财';
 
-  String serverAddr = 'www.sengeapp.top';
-  //String serverAddr = '127.0.0.1';
-
-
-  // 原有数组
   List<int> redArray = [0, 0, 0, 0, 0, 0];
   List<int> blueArray = [0];
 
-  // 播放状态
   bool playing = false;
   int redIndex = 0;
   int blueIndex = 0;
-  int phase = 0; // 0:未播放/完成, 1:红区播放中, 2:蓝区播放中
+  int phase = 0; // 0:未播放/完成, 1:红区播放中, 2:蓝区播放中, 3:完成
 
-  // 控制每个数字是否显示（用于淡入动画）
   List<bool> redVisible = [];
   List<bool> blueVisible = [];
-    // 从服务器获取的描述文本
-  String descriptionText = '双色球-采用大模型'; // 默认值
-  // UI 状态文字
+
+  String descriptionText = '双色球-采用大模型';
   String statusText = 'Start';
   Color statusColor = Colors.grey.shade400;
   String progressText = '';
 
-  // 按钮状态
   bool loading = false;
-  String buttonText = '来财'; // 按钮文字固定为“来财”
-
-  // 内部状态标记（用于区分完成、错误）
   bool _isCompleted = false;
   bool _isError = false;
 
-  // 新增：错误信息与剩余次数
   String errorMessage = '';
   int remainingQuota = 0;
   bool loadingQuota = true;
 
   Timer? _timer;
+  late final Dio _dio;
 
   @override
   void initState() {
     super.initState();
+    _dio = _createDio();
     _initVisibility();
-    _fetchQuota(); // 启动时获取剩余次数
-  // 初始化 Dio 实例
+    _fetchQuota();
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _dio.close(force: true);
     super.dispose();
+  }
+
+  Dio _createDio() {
+    final dio = Dio();
+    (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
+      final client = HttpClient();
+      client.badCertificateCallback = (X509Certificate cert, String host, int port) {
+        return host == serverAddr;
+      };
+      return client;
+    };
+    return dio;
   }
 
   void _initVisibility() {
@@ -138,7 +138,7 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
           redVisible[redIndex] = true;
           statusText = '${redIndex + 1} number: ${redArray[redIndex]}...';
           statusColor = const Color(0xFFFF9999);
-          progressText = '${redIndex + 1}/${redArray.length} | ${blueIndex}/${blueArray.length}';
+          progressText = '${redIndex + 1}/${redArray.length} | $blueIndex/${blueArray.length}';
         });
         redIndex++;
         if (redIndex >= redArray.length) {
@@ -147,7 +147,6 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
             statusText = '...';
             statusColor = const Color(0xFF9999FF);
           });
-          _flashRed();
         }
       }
     } else if (phase == 2) {
@@ -165,12 +164,6 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     }
   }
 
-  void _flashRed() {
-    Future.delayed(const Duration(milliseconds: 100), () {
-      setState(() {});
-    });
-  }
-
   void _finishPlay() {
     _timer?.cancel();
     setState(() {
@@ -180,18 +173,10 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
       statusText = 'Done';
       statusColor = const Color(0xFFCC88CC);
       progressText = '${redArray.length}/${redArray.length} | ${blueArray.length}/${blueArray.length}';
-      _isCompleted = true; // 标记为完成状态
-    });
-    _flashBlue();
-  }
-
-  void _flashBlue() {
-    Future.delayed(const Duration(milliseconds: 100), () {
-      setState(() {});
+      _isCompleted = true;
     });
   }
 
-  // 过滤错误信息中的 IP 地址和端口
   String _filterSensitiveInfo(String errorMessage) {
     final pattern = RegExp(
       r'address\s*=\s*\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b\s*,\s*port\s*=\s*\d{2,5}',
@@ -204,124 +189,52 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     return filtered;
   }
 
-  // 获取剩余次数
   Future<void> _fetchQuota() async {
     setState(() {
       loadingQuota = true;
       errorMessage = '';
     });
 
-    try{
-       Dio dio = Dio();
-        // 配置HttpClient适配器
-        (dio.httpClientAdapter as IOHttpClientAdapter).onHttpClientCreate = (HttpClient client) {
-          // 在这里配置底层的HttpClient
-          client.badCertificateCallback = (X509Certificate cert, String host, int port) {
-                // 打印跳过验证的详细日志（方便调试）
-                print('=====================================');
-                print('⚠️  跳过SSL证书验证 - 调试信息');
-                print('请求域名：$host');
-                print('请求端口：$port');
-                print('证书颁发者：${cert.issuer}');
-                print('证书主体：${cert.subject}');
-                print('=====================================');
-                
-                // 可选：仅跳过指定域名（推荐），其他域名仍校验
-                bool skipCert = host == 'www.sengeapp.top'; 
-                if (skipCert) {
-                  print('✅ 已跳过 $host 的证书验证');
-                } else {
-                  print('❌ 未跳过 $host 的证书验证');
-                }
-                return skipCert; // 返回true才会跳过，false则正常校验
-          };
-        };
-
-       Response response = await dio.get('https://api.apiopen.top');
-        //Response response = await dio.get('https://${serverAddr}/api/count');
-      
-      // 3. 打印响应结果（验证请求成功）
-      print('✅ HTTPS 请求成功！');
-      print('状态码：${response.statusCode}');
-      print('响应数据：${response.data}');
-    }
-    catch (e) {
-        print('❌ 直接测试异常: $e');
-    }
-
-
-   /*
     try {
-      //final client = HttpClient();  
-        Dio dio = Dio();
-
-      //final request = await client.getUrl(Uri.parse('https://${serverAddr}/api/count'));
-     // final request = await client.getUrl(Uri.parse('https://www.bilibili.com/'));
-      //request.headers.add('X-App-Key', 'SENGE_SECRET_KEY');
-      //request.headers.add('User-Agent', 'SENGEApp/1.0.0');
-
-
-  
-      Response response = await dio.get(
-            '43.138.243.151:8888/api/quota',
-            // 可选：显式传递 Host 头，解决 SNI 问题
-            options: Options(
-              headers: {
-                //'Host': serverAddr,
-                'X-App-Key': 'SENGE_SECRET_KEY'
-              },
-            ),
-          );
-
-      //final response = await request.close();
+      final response = await _dio.get(
+        'https://$serverAddr/api/count',
+        options: Options(
+          headers: {
+            'X-App-Key': 'SENGE_SECRET_KEY',
+            'User-Agent': 'SENGEApp/1.0.0',
+          },
+        ),
+      );
 
       if (response.statusCode == 200) {
-          print('response.statusCode == 200');
-          //final stringData = await response.transform(utf8.decoder).join();
-          //final Map<String, dynamic> data = jsonDecode(stringData);
+        final data = response.data is Map<String, dynamic>
+            ? response.data as Map<String, dynamic>
+            : <String, dynamic>{};
 
-          Map<String, dynamic> data = response.data;
-
-    
-          // 解析描述文本（如果接口返回）
+        setState(() {
           if (data.containsKey('description')) {
             descriptionText = data['description'].toString();
           }
-          setState(() {
-            remainingQuota = data['remaining'] ?? 0;
-            loadingQuota = false;
-          }); 
+          remainingQuota = (data['remaining'] as num?)?.toInt() ?? 0;
+          loadingQuota = false;
+        });
       } else {
-          setState(() {
-            errorMessage = '获取剩余次数失败 (${response.statusCode})';
-            loadingQuota = false;
-          });
+        setState(() {
+          errorMessage = '获取剩余次数失败 (${response.statusCode})';
+          loadingQuota = false;
+        });
       }
-      //client.close();
     } catch (e) {
-        print('❌ 直接测试异常: $e');
-        if (e is HandshakeException) {
-          print('   HandshakeException 详情: ${e.message}');
-          print('   HandshakeException 操作系统消息: ${e.osError?.message}');
-        }
-        if (e is SocketException) {
-          print('   SocketException 详情: ${e.message}');
-          print('   SocketException 操作系统错误: ${e.osError?.message}');
-        }
-        if (e is TlsException) {
-          print('   TlsException 详情: ${e.message}');
-        }
-          setState(() {
-            errorMessage = _filterSensitiveInfo('网络错误: $e');
-            loadingQuota = false;
-          });
-    }*/
+      setState(() {
+        errorMessage = _filterSensitiveInfo('网络错误: $e');
+        loadingQuota = false;
+      });
+    }
   }
 
-  // 获取数据
   Future<void> _fetchData() async {
     setState(() {
-      _resetState(); // 重置界面
+      _resetState();
       loading = true;
       _isCompleted = false;
       _isError = false;
@@ -331,19 +244,25 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     });
 
     try {
-      final client = HttpClient();
-      final request = await client.getUrl(Uri.parse('https://${serverAddr}/api/doit/'));
-      request.headers.add('X-App-Key', 'SENGE_SECRET_KEY');
-      request.headers.add('User-Agent', 'SENGEApp/1.0.0');
-      final response = await request.close();
-      if (response.statusCode == 200) {
-        final stringData = await response.transform(utf8.decoder).join();
-        final Map<String, dynamic> data = jsonDecode(stringData);
+      final response = await _dio.get(
+        'https://$serverAddr/api/doit/',
+        options: Options(
+          headers: {
+            'X-App-Key': 'SENGE_SECRET_KEY',
+            'User-Agent': 'SENGEApp/1.0.0',
+          },
+        ),
+      );
 
-        final String redStr = data['red'];
-        final String blueStr = data['blue'];
-        final List<int> newRed = redStr.split(',').map(int.parse).toList();
-        final List<int> newBlue = blueStr.split(',').map(int.parse).toList();
+      if (response.statusCode == 200) {
+        final data = response.data is Map<String, dynamic>
+            ? response.data as Map<String, dynamic>
+            : <String, dynamic>{};
+
+        final String redStr = data['red']?.toString() ?? '';
+        final String blueStr = data['blue']?.toString() ?? '';
+        final List<int> newRed = redStr.split(',').map((s) => int.tryParse(s.trim()) ?? 0).toList();
+        final List<int> newBlue = blueStr.split(',').map((s) => int.tryParse(s.trim()) ?? 0).toList();
 
         setState(() {
           redArray = newRed;
@@ -354,89 +273,70 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
           loading = false;
         });
 
-        // 成功获取后重新刷新剩余次数（服务器会扣减）
         _fetchQuota();
-
         _startPlay();
       } else {
         setState(() {
           errorMessage = _filterSensitiveInfo('请求失败: ${response.statusCode}');
           loading = false;
-          _isError = true; // 标记错误状态
+          _isError = true;
         });
       }
-      client.close();
     } catch (e) {
       setState(() {
         errorMessage = _filterSensitiveInfo('错误: $e');
         loading = false;
-        _isError = true; // 标记错误状态
+        _isError = true;
       });
     }
   }
 
   void _onButtonPressed() {
     if (loading) return;
-
-    // 剩余次数为0时不允许请求
-    if (remainingQuota <= 0) {
-      setState(() {
-        errorMessage = '今日次数已用完';
-      });
-      return;
-    }
-
-    // 如果处于完成或错误状态，先重置界面再获取新数据
     if (_isCompleted || _isError) {
       _resetState();
     }
     _fetchData();
   }
 
-  // 根据状态获取按钮背景色
   Color _getButtonColor() {
     if (loading) return Colors.grey;
-    if (_isCompleted) return const Color(0xFF6633CC); // 紫色
-    if (_isError) return Colors.red; // 红色
-    return const Color(0xFF3399CC); // 默认蓝色
+    if (_isCompleted) return const Color(0xFF6633CC);
+    if (_isError) return Colors.red;
+    return const Color(0xFF3399CC);
   }
 
   @override
   Widget build(BuildContext context) {
-    double screenWidth = MediaQuery.of(context).size.width;
+    final double screenWidth = MediaQuery.of(context).size.width;
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
           image: DecorationImage(
-            image: AssetImage('assets/background.jpg'), // 背景图路径
-            fit: BoxFit.cover, // 覆盖整个屏幕
-            opacity: 0.3, // 透明度，让前景内容更清晰
+            image: AssetImage('assets/background.jpg'),
+            fit: BoxFit.cover,
+            opacity: 0.3,
           ),
         ),
         child: Padding(
           padding: const EdgeInsets.all(15.0),
           child: Column(
             children: [
-              // 动态描述文本（替换原“双色球-采用AI大模型”）
               Text(
                 descriptionText,
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
               ),
               const SizedBox(height: 10),
-
-              // 显示剩余次数
               Text(
                 loadingQuota
                     ? '获取剩余次数中...'
-                    : '今日剩余次数：$remainingQuota',
+                    : '今日剩余次数:$remainingQuota',
                 style: TextStyle(
                   fontSize: 18,
                   color: remainingQuota > 0 ? Colors.green : Colors.red,
                 ),
               ),
               const SizedBox(height: 20),
-
-              // 红区
               _buildHeaderRow(
                 title: 'red',
                 titleColor: const Color(0xFFFF6666),
@@ -447,7 +347,6 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
                   textColor: const Color(0xFFFFCCCC),
                 ),
               ),
-              // 蓝区
               _buildHeaderRow(
                 title: 'blue',
                 titleColor: const Color(0xFF6666FF),
@@ -458,18 +357,12 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
                   textColor: const Color(0xFFCCCCFF),
                 ),
               ),
-
               const SizedBox(height: 10),
-
-              // 进度标签
               Text(
                 progressText,
                 style: const TextStyle(fontSize: 16, color: Color(0xFFCCCCCC)),
               ),
-
               const SizedBox(height: 20),
-
-              // 播放按钮（自适应居中，文字固定为“来财”）
               Center(
                 child: SizedBox(
                   width: screenWidth * 0.6,
@@ -481,14 +374,11 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
                       foregroundColor: Colors.white,
                       textStyle: const TextStyle(fontSize: 30),
                     ),
-                    child: Text(buttonText), // 始终显示“来财”
+                    child: const Text(buttonText),
                   ),
                 ),
               ),
-
               const SizedBox(height: 10),
-
-              // 错误信息显示
               Text(
                 errorMessage,
                 style: const TextStyle(color: Colors.red, fontSize: 16),
@@ -533,6 +423,7 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
       scrollDirection: Axis.horizontal,
       child: Row(
         children: List.generate(array.length, (index) {
+          final visible = visibleList[index];
           return Container(
             width: 60,
             height: 60,
@@ -540,14 +431,14 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
             decoration: BoxDecoration(shape: BoxShape.circle, color: bgColor),
             child: Center(
               child: AnimatedOpacity(
-                opacity: visibleList[index] ? 1.0 : 0.0,
+                opacity: visible ? 1.0 : 0.0,
                 duration: const Duration(milliseconds: 500),
                 curve: Curves.easeIn,
                 child: Text(
-                  visibleList[index] ? '${array[index]}' : '',
+                  visible ? '${array[index]}' : '',
                   style: TextStyle(
                     fontSize: 28,
-                    color: textColor.withOpacity(visibleList[index] ? 1 : 0),
+                    color: textColor.withValues(alpha: visible ? 1 : 0),
                     fontWeight: FontWeight.normal,
                   ),
                 ),
