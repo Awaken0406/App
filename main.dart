@@ -1,9 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:async';
-import 'dart:io';
-import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
+
+import 'net/protocol.dart';
+import 'net/tcp_client.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -37,7 +38,8 @@ class SimpleArrayDisplay extends StatefulWidget {
 }
 
 class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
-  static const String serverAddr = 'www.sengeapp.top';
+  static const String serverHost = '127.0.0.1';
+  static const int serverPort = 9527;
   static const String buttonText = '来财';
 
   List<int> redArray = [0, 0, 0, 0, 0, 0];
@@ -63,35 +65,39 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
   String errorMessage = '';
   int remainingQuota = 0;
   bool loadingQuota = true;
+  ConnState _connState = ConnState.disconnected;
 
   Timer? _timer;
-  late final Dio _dio;
+  late final TcpClient _client;
+  StreamSubscription<ConnState>? _stateSub;
+  bool _initialQuotaFetched = false;
 
   @override
   void initState() {
     super.initState();
-    _dio = _createDio();
     _initVisibility();
-    _fetchQuota();
+    _client = TcpClient(host: serverHost, port: serverPort);
+    _stateSub = _client.state.listen(_onConnState);
+    _client.start();
   }
 
   @override
   void dispose() {
     _timer?.cancel();
-    _dio.close(force: true);
+    _stateSub?.cancel();
+    _client.stop();
     super.dispose();
   }
 
-  Dio _createDio() {
-    final dio = Dio();
-    (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
-      final client = HttpClient();
-      client.badCertificateCallback = (X509Certificate cert, String host, int port) {
-        return host == serverAddr;
-      };
-      return client;
-    };
-    return dio;
+  void _onConnState(ConnState s) {
+    if (!mounted) return;
+    setState(() {
+      _connState = s;
+    });
+    if (s == ConnState.connected && !_initialQuotaFetched) {
+      _initialQuotaFetched = true;
+      _fetchQuota();
+    }
   }
 
   void _initVisibility() {
@@ -177,56 +183,35 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     });
   }
 
-  String _filterSensitiveInfo(String errorMessage) {
-    final pattern = RegExp(
-      r'address\s*=\s*\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b\s*,\s*port\s*=\s*\d{2,5}',
-      caseSensitive: false,
-    );
-    String filtered = errorMessage.replaceAll(pattern, '');
-    filtered = filtered.replaceAll(RegExp(r',\s*,'), ',');
-    filtered = filtered.replaceAll(RegExp(r',\s*$'), '');
-    filtered = filtered.replaceAll(RegExp(r'\s+'), ' ').trim();
-    return filtered;
+  String _humanizeError(Object e) {
+    if (e is NotConnectedException) return '未连接，正在重连...';
+    if (e is TimeoutException) return '请求超时';
+    if (e is ServerErrorException) return e.message;
+    final s = e.toString();
+    return s.replaceAll(RegExp(r'(\d{1,3}\.){3}\d{1,3}(:\d{2,5})?'), '').trim();
   }
 
   Future<void> _fetchQuota() async {
+    if (!mounted) return;
     setState(() {
       loadingQuota = true;
       errorMessage = '';
     });
 
     try {
-      final response = await _dio.get(
-        'https://$serverAddr/api/count',
-        options: Options(
-          headers: {
-            'X-App-Key': 'SENGE_SECRET_KEY',
-            'User-Agent': 'SENGEApp/1.0.0',
-          },
-        ),
-      );
-
-      if (response.statusCode == 200) {
-        final data = response.data is Map<String, dynamic>
-            ? response.data as Map<String, dynamic>
-            : <String, dynamic>{};
-
-        setState(() {
-          if (data.containsKey('description')) {
-            descriptionText = data['description'].toString();
-          }
-          remainingQuota = (data['remaining'] as num?)?.toInt() ?? 0;
-          loadingQuota = false;
-        });
-      } else {
-        setState(() {
-          errorMessage = '获取剩余次数失败 (${response.statusCode})';
-          loadingQuota = false;
-        });
-      }
-    } catch (e) {
+      final f = await _client.request(Op.reqQuota);
+      if (!mounted) return;
       setState(() {
-        errorMessage = _filterSensitiveInfo('网络错误: $e');
+        if (f.payload.containsKey('description')) {
+          descriptionText = f.payload['description'].toString();
+        }
+        remainingQuota = (f.payload['remaining'] as num?)?.toInt() ?? 0;
+        loadingQuota = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        errorMessage = _humanizeError(e);
         loadingQuota = false;
       });
     }
@@ -244,47 +229,36 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     });
 
     try {
-      final response = await _dio.get(
-        'https://$serverAddr/api/doit/',
-        options: Options(
-          headers: {
-            'X-App-Key': 'SENGE_SECRET_KEY',
-            'User-Agent': 'SENGEApp/1.0.0',
-          },
-        ),
-      );
+      final f = await _client.request(Op.reqDraw);
+      if (!mounted) return;
+      final data = f.payload;
+      final String redStr = data['red']?.toString() ?? '';
+      final String blueStr = data['blue']?.toString() ?? '';
+      final List<int> newRed =
+          redStr.split(',').map((s) => int.tryParse(s.trim()) ?? 0).toList();
+      final List<int> newBlue =
+          blueStr.split(',').map((s) => int.tryParse(s.trim()) ?? 0).toList();
 
-      if (response.statusCode == 200) {
-        final data = response.data is Map<String, dynamic>
-            ? response.data as Map<String, dynamic>
-            : <String, dynamic>{};
-
-        final String redStr = data['red']?.toString() ?? '';
-        final String blueStr = data['blue']?.toString() ?? '';
-        final List<int> newRed = redStr.split(',').map((s) => int.tryParse(s.trim()) ?? 0).toList();
-        final List<int> newBlue = blueStr.split(',').map((s) => int.tryParse(s.trim()) ?? 0).toList();
-
-        setState(() {
-          redArray = newRed;
-          blueArray = newBlue;
-          _initVisibility();
-          statusText = 'Done !!!';
-          statusColor = Colors.green;
-          loading = false;
-        });
-
-        _fetchQuota();
-        _startPlay();
-      } else {
-        setState(() {
-          errorMessage = _filterSensitiveInfo('请求失败: ${response.statusCode}');
-          loading = false;
-          _isError = true;
-        });
-      }
-    } catch (e) {
       setState(() {
-        errorMessage = _filterSensitiveInfo('错误: $e');
+        redArray = newRed;
+        blueArray = newBlue;
+        _initVisibility();
+        statusText = 'Done !!!';
+        statusColor = Colors.green;
+        loading = false;
+        if (data.containsKey('description')) {
+          descriptionText = data['description'].toString();
+        }
+        if (data['remaining'] is num) {
+          remainingQuota = (data['remaining'] as num).toInt();
+        }
+      });
+
+      _startPlay();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        errorMessage = _humanizeError(e);
         loading = false;
         _isError = true;
       });
@@ -306,9 +280,20 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
     return const Color(0xFF3399CC);
   }
 
+  String _quotaLabel() {
+    if (_connState != ConnState.connected) {
+      return _connState == ConnState.connecting ? '连接中...' : '未连接';
+    }
+    if (loadingQuota) return '获取剩余次数中...';
+    return '今日剩余次数:$remainingQuota';
+  }
+
   @override
   Widget build(BuildContext context) {
     final double screenWidth = MediaQuery.of(context).size.width;
+    final bool buttonEnabled = !loading &&
+        _connState == ConnState.connected &&
+        remainingQuota > 0;
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -328,12 +313,12 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
               ),
               const SizedBox(height: 10),
               Text(
-                loadingQuota
-                    ? '获取剩余次数中...'
-                    : '今日剩余次数:$remainingQuota',
+                _quotaLabel(),
                 style: TextStyle(
                   fontSize: 18,
-                  color: remainingQuota > 0 ? Colors.green : Colors.red,
+                  color: _connState == ConnState.connected
+                      ? (remainingQuota > 0 ? Colors.green : Colors.red)
+                      : Colors.orange,
                 ),
               ),
               const SizedBox(height: 20),
@@ -367,7 +352,7 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
                 child: SizedBox(
                   width: screenWidth * 0.6,
                   child: ElevatedButton(
-                    onPressed: (loading || remainingQuota <= 0) ? null : _onButtonPressed,
+                    onPressed: buttonEnabled ? _onButtonPressed : null,
                     style: ElevatedButton.styleFrom(
                       minimumSize: const Size(double.infinity, 50),
                       backgroundColor: _getButtonColor(),

@@ -1,207 +1,334 @@
-from fastapi import FastAPI, Request, HTTPException, Depends
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
-from datetime import datetime, date
-import random
-import uvicorn
+"""Reference TCP server for the Flutter Number Area app.
+
+Frame layout (big-endian):
+    magic[2]=0x53,0x47 | ver(1) | op(1) | seq(4) | length(4) | payload(length)
+payload = UTF-8 JSON object (may be empty when length == 0).
+
+Persistence: per-IP daily request count is stored in MySQL (`rate_limit` table),
+mirrored to an in-memory cache. APScheduler resets both at local 00:00:00.
+
+Run:
+    python server.py --host 0.0.0.0 --port 9527
+"""
+
+from __future__ import annotations
+
+import argparse
 import asyncio
+import json
+import logging
+import random
+import struct
+from dataclasses import dataclass
+from datetime import date, datetime
+
 import aiomysql
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-import Selenium_Ball  # 你的原始模块
 
-# ==================== 配置 ====================
-MYSQL_CONFIG = {
-    'host': 'localhost',
-    'port': 3306,
-    'user': 'root',
-    'password': 'Root@123456',
-    'db': 'senge',
-    'autocommit': True
-}
-RATE_LIMIT_PER_DAY = 3  # 每个IP每天最多请求次数
+# ==================== 协议常量 ====================
+MAGIC0 = 0x53
+MAGIC1 = 0x47
+VERSION = 0x01
+HEADER = struct.Struct(">BBBBII")  # magic0, magic1, ver, op, seq, length
+MAX_PAYLOAD = 64 * 1024
 
-# ==================== 全局变量 ====================
-app = FastAPI(title="Simple API Demo with Rate Limit")
-pool = None                # MySQL连接池
-ip_cache = {}              # 内存缓存: {ip: (count, today_date)}
-cache_lock = asyncio.Lock() # 缓存锁
+OP_REQ_QUOTA = 0x01
+OP_RESP_QUOTA = 0x02
+OP_REQ_DRAW = 0x03
+OP_RESP_DRAW = 0x04
+OP_PING = 0x10
+OP_PONG = 0x11
+OP_ERR = 0x7F
+
+DESCRIPTION = "双色球-采用SENGE大模型"
+DEFAULT_DAILY_QUOTA = 3
+
+# ==================== 全局状态 ====================
+log = logging.getLogger("tcp_server")
+pool: aiomysql.Pool | None = None
+ip_cache: dict[str, tuple[int, date]] = {}
+cache_lock = asyncio.Lock()
 scheduler = AsyncIOScheduler()
+DAILY_QUOTA = DEFAULT_DAILY_QUOTA
 
-# ==================== 数据库初始化 ====================
-async def init_db():
+
+# ==================== Frame 编解码 ====================
+@dataclass
+class Frame:
+    op: int
+    seq: int
+    payload: dict
+
+
+def encode(frame: Frame) -> bytes:
+    body = json.dumps(frame.payload, ensure_ascii=False).encode("utf-8")
+    if len(body) > MAX_PAYLOAD:
+        raise ValueError(f"payload too large: {len(body)}")
+    head = HEADER.pack(MAGIC0, MAGIC1, VERSION, frame.op & 0xFF, frame.seq, len(body))
+    return head + body
+
+
+async def read_frame(reader: asyncio.StreamReader) -> Frame:
+    head = await reader.readexactly(HEADER.size)
+    m0, m1, ver, op, seq, length = HEADER.unpack(head)
+    if m0 != MAGIC0 or m1 != MAGIC1:
+        raise ValueError(f"bad magic: 0x{m0:02x} 0x{m1:02x}")
+    if ver != VERSION:
+        raise ValueError(f"unsupported version: {ver}")
+    if length > MAX_PAYLOAD:
+        raise ValueError(f"payload too large: {length}")
+    body = await reader.readexactly(length) if length else b""
+    payload = json.loads(body.decode("utf-8")) if body else {}
+    if not isinstance(payload, dict):
+        raise ValueError("payload is not a json object")
+    return Frame(op=op, seq=seq, payload=payload)
+
+
+# ==================== 数据库 ====================
+async def init_db(cfg: dict) -> None:
     global pool
-    pool = await aiomysql.create_pool(**MYSQL_CONFIG)
+    pool = await aiomysql.create_pool(**cfg)
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("""
+            await cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS rate_limit (
                     ip VARCHAR(45) PRIMARY KEY,
                     count INT NOT NULL DEFAULT 0,
                     date DATE NOT NULL
                 )
-            """)
+                """
+            )
             await conn.commit()
+    log.info("MySQL connected (db=%s)", cfg.get("db"))
 
-async def close_db():
-    if pool:
+
+async def close_db() -> None:
+    global pool
+    if pool is not None:
         pool.close()
         await pool.wait_closed()
+        pool = None
 
-# ==================== 清空任务 ====================
-async def reset_all_limits():
-    """每日零点清空内存缓存和数据库"""
-    global ip_cache
+
+async def reset_all_limits() -> None:
+    """每日零点清空内存缓存与数据库。"""
     async with cache_lock:
         ip_cache.clear()
+    if pool is not None:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("DELETE FROM rate_limit")
+                await conn.commit()
+    log.info("daily quota reset done at %s", datetime.now().isoformat(timespec="seconds"))
+
+
+async def _load_count_from_db(ip: str, today: date) -> int:
+    assert pool is not None
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("DELETE FROM rate_limit")
-            await conn.commit()
-    print(f"[{datetime.now()}] 已清空所有请求计数")
+            await cur.execute(
+                "SELECT count, date FROM rate_limit WHERE ip = %s",
+                (ip,),
+            )
+            row = await cur.fetchone()
+    if row and row[1] == today:
+        return int(row[0])
+    return 0
 
-# ==================== 限流依赖 ====================
-async def rate_limit(request: Request):
-    client_ip = request.client.host
-    today = date.today()
 
-    app_key = request.headers.get('X-App-Key')
-    if app_key != 'SENGE_SECRET_KEY':
-        # 校验失败，返回403禁止访问
-        raise HTTPException(status_code=403, detail="禁止访问")
-
-    async with cache_lock:
-        # 1. 检查内存缓存
-        cached = ip_cache.get(client_ip)
-        if cached and cached[1] == today:
-            count = cached[0]
-        else:
-            # 2. 缓存未命中或日期不符，查询数据库
-            async with pool.acquire() as conn:
-                async with conn.cursor() as cur:
-                    await cur.execute(
-                        "SELECT count, date FROM rate_limit WHERE ip = %s",
-                        (client_ip,)
-                    )
-                    row = await cur.fetchone()
-            if row and row[1] == today:
-                count = row[0]
-            else:
-                # 3. 新IP或新的一天，插入/重置
-                count = 0
-                async with pool.acquire() as conn:
-                    async with conn.cursor() as cur:
-                        await cur.execute(
-                            "INSERT INTO rate_limit (ip, count, date) VALUES (%s, %s, %s) "
-                            "ON DUPLICATE KEY UPDATE count = %s, date = %s",
-                            (client_ip, 0, today, 0, today)
-                        )
-                        await conn.commit()
-            # 更新缓存
-            ip_cache[client_ip] = (count, today)
-
-    # 4. 判断是否超限
-    if count >= RATE_LIMIT_PER_DAY:
-        raise HTTPException(status_code=429, detail="请求次数超限，请明天再试")
-
-    # 5. 增加计数（内存中增加，异步写回数据库）
-    async with cache_lock:
-        ip_cache[client_ip] = (count + 1, today)
-        # 触发异步数据库更新（不等待）
-        asyncio.create_task(update_db_count(client_ip, count + 1, today))
-
-    # 继续处理请求
-    return client_ip  # 可以传递，这里不必须
-
-async def update_db_count(ip: str, new_count: int, today: date):
-    """异步将计数写入数据库"""
+async def _upsert_count(ip: str, count: int, today: date) -> None:
+    assert pool is not None
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
-                    "UPDATE rate_limit SET count = %s WHERE ip = %s AND date = %s",
-                    (new_count, ip, today)
+                    "INSERT INTO rate_limit (ip, count, date) VALUES (%s, %s, %s) "
+                    "ON DUPLICATE KEY UPDATE count = %s, date = %s",
+                    (ip, count, today, count, today),
                 )
                 await conn.commit()
     except Exception as e:
-        print(f"更新数据库失败 {ip}: {e}")
+        log.warning("db upsert failed for %s: %s", ip, e)
 
-# ==================== 新增接口：查询剩余次数 ====================
-@app.get("/api/count")
-async def get_count(request: Request):
-    """返回当前IP剩余的请求次数（不消耗次数）"""
-    client_ip = request.client.host
+
+async def get_count(ip: str) -> int:
+    """读：返回今天该 IP 已消耗的次数（不消耗）。"""
     today = date.today()
-
-    app_key = request.headers.get('X-App-Key')
-    #if app_key != 'SENGE_SECRET_KEY':
-        # 校验失败，返回403禁止访问
-    #    raise HTTPException(status_code=403, detail="禁止访问")
-
     async with cache_lock:
-        # 优先从缓存读取
-        cached = ip_cache.get(client_ip)
+        cached = ip_cache.get(ip)
+        if cached and cached[1] == today:
+            return cached[0]
+        count = await _load_count_from_db(ip, today)
+        ip_cache[ip] = (count, today)
+        return count
+
+
+async def consume_one(ip: str) -> tuple[bool, int]:
+    """写：尝试消耗一次。返回 (是否成功, 剩余次数)。"""
+    today = date.today()
+    async with cache_lock:
+        cached = ip_cache.get(ip)
         if cached and cached[1] == today:
             count = cached[0]
         else:
-            # 缓存不存在或日期不符，从数据库查询
-            async with pool.acquire() as conn:
-                async with conn.cursor() as cur:
-                    await cur.execute(
-                        "SELECT count, date FROM rate_limit WHERE ip = %s",
-                        (client_ip,)
-                    )
-                    row = await cur.fetchone()
-            if row and row[1] == today:
-                count = row[0]
-            else:
-                count = 0  # 从未请求过，剩余次数为 RATE_LIMIT_PER_DAY
-            # 更新缓存（只读，不改变计数）
-            ip_cache[client_ip] = (count, today)
-
-    remaining = max(0, RATE_LIMIT_PER_DAY - count)
-    return {"remaining": remaining,"description":"双色球-采用SENGE大模型"}
-
-# ==================== 原始路由（添加依赖） ====================
-class EchoResponse(BaseModel):
-    received: Dict[str, Any]
-    message: str = "Data received"
-
-@app.get("/api/doit", dependencies=[Depends(rate_limit)])
-async def doit(name: Optional[str] = "World"):
-    outred, outblue = Selenium_Ball.CallRun()
-    red = ", ".join(map(str, outred))
-    blue = ", ".join(map(str, outblue))
-    return {
-        "message": f"Hello {name}!",
-        "method": "GET",
-        "red": red,
-        "blue": blue
-    }
+            count = await _load_count_from_db(ip, today)
+        if count >= DAILY_QUOTA:
+            ip_cache[ip] = (count, today)
+            return False, 0
+        new_count = count + 1
+        ip_cache[ip] = (new_count, today)
+        asyncio.create_task(_upsert_count(ip, new_count, today))
+        return True, max(0, DAILY_QUOTA - new_count)
 
 
+# ==================== 业务 ====================
+def draw_lottery() -> tuple[list[int], list[int]]:
+    red = sorted(random.sample(range(1, 34), 6))
+    blue = [random.randint(1, 16)]
+    return red, blue
 
 
-# ==================== 生命周期管理 ====================
-@app.on_event("startup")
-async def startup():
-    await init_db()
-    # 添加每日零点清空任务
+async def dispatch(frame: Frame, writer: asyncio.StreamWriter, ip: str) -> None:
+    if frame.op == OP_PING:
+        writer.write(encode(Frame(OP_PONG, frame.seq, {})))
+        await writer.drain()
+        return
+
+    if frame.op == OP_REQ_QUOTA:
+        used = await get_count(ip)
+        remaining = max(0, DAILY_QUOTA - used)
+        writer.write(
+            encode(
+                Frame(
+                    OP_RESP_QUOTA,
+                    frame.seq,
+                    {"description": DESCRIPTION, "remaining": remaining},
+                )
+            )
+        )
+        await writer.drain()
+        return
+
+    if frame.op == OP_REQ_DRAW:
+        ok, remaining = await consume_one(ip)
+        if not ok:
+            writer.write(
+                encode(
+                    Frame(OP_ERR, frame.seq, {"code": 429, "message": "今日次数已用完"})
+                )
+            )
+            await writer.drain()
+            return
+        red, blue = draw_lottery()
+        writer.write(
+            encode(
+                Frame(
+                    OP_RESP_DRAW,
+                    frame.seq,
+                    {
+                        "red": ",".join(map(str, red)),
+                        "blue": ",".join(map(str, blue)),
+                        "remaining": remaining,
+                        "description": DESCRIPTION,
+                    },
+                )
+            )
+        )
+        await writer.drain()
+        return
+
+    writer.write(
+        encode(
+            Frame(
+                OP_ERR,
+                frame.seq,
+                {"code": 400, "message": f"unknown op: 0x{frame.op:02x}"},
+            )
+        )
+    )
+    await writer.drain()
+
+
+# ==================== 连接处理 ====================
+async def handle_client(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+) -> None:
+    peer = writer.get_extra_info("peername")
+    ip = peer[0] if peer else "unknown"
+    log.info("client connected: %s", peer)
+    try:
+        while True:
+            try:
+                frame = await read_frame(reader)
+            except asyncio.IncompleteReadError:
+                break
+            except (ValueError, json.JSONDecodeError) as e:
+                log.warning("[%s] bad frame: %s", ip, e)
+                break
+            await dispatch(frame, writer, ip)
+    finally:
+        log.info("client disconnected: %s", peer)
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+
+# ==================== 启动 ====================
+async def main_async(host: str, port: int, mysql_cfg: dict) -> None:
+    await init_db(mysql_cfg)
     scheduler.add_job(reset_all_limits, CronTrigger(hour=0, minute=0, second=0))
     scheduler.start()
-    print("限流服务已启动，每日零点自动重置")
+    log.info("scheduler started: daily reset at 00:00:00 (local)")
 
-@app.on_event("shutdown")
-async def shutdown():
-    scheduler.shutdown()
-    await close_db()
+    server = await asyncio.start_server(handle_client, host=host, port=port)
+    addrs = ", ".join(str(s.getsockname()) for s in server.sockets)
+    log.info("listening on %s (daily quota=%d)", addrs, DAILY_QUOTA)
 
-# ==================== 启动（HTTPS） ====================
-if __name__ == "__main__":
-    now = datetime.now()
-    random.seed(now.timestamp())
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8888,
+    try:
+        async with server:
+            await server.serve_forever()
+    finally:
+        scheduler.shutdown(wait=False)
+        await close_db()
+
+
+def main() -> None:
+    global DAILY_QUOTA
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=9527)
+    parser.add_argument("--daily", type=int, default=DEFAULT_DAILY_QUOTA)
+    parser.add_argument("--mysql-host", default="localhost")
+    parser.add_argument("--mysql-port", type=int, default=3306)
+    parser.add_argument("--mysql-user", default="root")
+    parser.add_argument("--mysql-password", default="Root@123456")
+    parser.add_argument("--mysql-db", default="senge")
+    parser.add_argument("--log", default="INFO")
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=args.log.upper(), format="%(asctime)s %(levelname)s %(message)s"
     )
+    DAILY_QUOTA = args.daily
+    random.seed(datetime.now().timestamp())
+
+    mysql_cfg = {
+        "host": args.mysql_host,
+        "port": args.mysql_port,
+        "user": args.mysql_user,
+        "password": args.mysql_password,
+        "db": args.mysql_db,
+        "autocommit": True,
+    }
+    try:
+        asyncio.run(main_async(args.host, args.port, mysql_cfg))
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
