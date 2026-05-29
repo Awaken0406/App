@@ -25,7 +25,7 @@ from datetime import date, datetime
 import aiomysql
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-
+import Selenium_Ball
 # ==================== 协议常量 ====================
 MAGIC0 = 0x53
 MAGIC1 = 0x47
@@ -185,8 +185,7 @@ async def consume_one(ip: str) -> tuple[bool, int]:
 
 # ==================== 业务 ====================
 def draw_lottery() -> tuple[list[int], list[int]]:
-    red = sorted(random.sample(range(1, 34), 6))
-    blue = [random.randint(1, 16)]
+    red, blue = Selenium_Ball.CallRun()
     return red, blue
 
 
