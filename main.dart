@@ -38,7 +38,7 @@ class SimpleArrayDisplay extends StatefulWidget {
 }
 
 class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
-  static const String serverHost = '127.0.0.1';
+  static const String serverHost = '43.138.243.151';
   static const int serverPort = 9527;
   static const String buttonText = '来财';
 
