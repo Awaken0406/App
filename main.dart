@@ -40,7 +40,7 @@ class SimpleArrayDisplay extends StatefulWidget {
 class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
   static const String serverHost = '43.138.243.151';
   static const int serverPort = 9527;
-  static const String buttonText = '来财';
+  static const String buttonText = '摇一摇';
 
   List<int> redArray = [0, 0, 0, 0, 0, 0];
   List<int> blueArray = [0];
@@ -53,7 +53,7 @@ class _SimpleArrayDisplayState extends State<SimpleArrayDisplay> {
   List<bool> redVisible = [];
   List<bool> blueVisible = [];
 
-  String descriptionText = '双色球-采用大模型';
+  String descriptionText = '采用大模型预测';
   String statusText = 'Start';
   Color statusColor = Colors.grey.shade400;
   String progressText = '';

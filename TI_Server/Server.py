@@ -41,7 +41,7 @@ OP_PING = 0x10
 OP_PONG = 0x11
 OP_ERR = 0x7F
 
-DESCRIPTION = "双色球-采用SENGE大模型"
+DESCRIPTION = "采用大模型预测"
 DEFAULT_DAILY_QUOTA = 3
 
 # ==================== 全局状态 ====================
